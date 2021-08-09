@@ -56,15 +56,9 @@ use scoped_tls::scoped_thread_local;
 
 use crate::{
     error::BuilderErrorKind,
-    parking,
-    sys,
+    parking, sys,
     task::{self, waker_fn::dummy_waker},
-    GlommioError,
-    IoRequirements,
-    IoStats,
-    Latency,
-    Reactor,
-    Shares,
+    GlommioError, IoRequirements, IoStats, Latency, Reactor, Shares,
 };
 use ahash::AHashMap;
 
@@ -411,6 +405,8 @@ pub struct LocalExecutorBuilder {
     io_memory: usize,
     /// How often to yield to other task queues
     preempt_timer_duration: Duration,
+
+    sq_poll: bool,
 }
 
 impl LocalExecutorBuilder {
@@ -423,7 +419,14 @@ impl LocalExecutorBuilder {
             name: String::from("unnamed"),
             io_memory: 10 << 20,
             preempt_timer_duration: Duration::from_millis(100),
+            sq_poll: false,
         }
+    }
+
+    /// A switch to enable or disable SQ_POLL
+    pub fn sq_poll(mut self, sq_poll: bool) -> Self {
+        self.sq_poll = sq_poll;
+        self
     }
 
     /// Sets the new executor's affinity to the provided CPU.  The largest `cpu`
@@ -493,6 +496,7 @@ impl LocalExecutorBuilder {
             self.preempt_timer_duration,
             self.binding.map(Some),
             self.spin_before_park,
+            self.sq_poll,
         )?;
         le.init();
         Ok(le)
@@ -549,6 +553,7 @@ impl LocalExecutorBuilder {
     {
         let notifier = sys::new_sleep_notifier()?;
         let name = format!("{}-{}", self.name, notifier.id());
+        let sq_poll = self.sq_poll;
 
         Builder::new()
             .name(name)
@@ -559,6 +564,7 @@ impl LocalExecutorBuilder {
                     self.preempt_timer_duration,
                     self.binding.map(Some),
                     self.spin_before_park,
+                    sq_poll,
                 )
                 .unwrap();
                 le.init();
@@ -617,6 +623,8 @@ pub struct LocalExecutorPoolBuilder {
     preempt_timer_duration: Duration,
     /// Indicates a policy by which [`LocalExecutor`]s are bound to CPUs.
     placement: Placement,
+
+    sq_poll: bool,
 }
 
 impl LocalExecutorPoolBuilder {
@@ -632,6 +640,7 @@ impl LocalExecutorPoolBuilder {
             io_memory: 10 << 20,
             preempt_timer_duration: Duration::from_millis(100),
             placement: Placement::Unbound,
+            sq_poll: false,
         }
     }
 
@@ -650,6 +659,11 @@ impl LocalExecutorPoolBuilder {
     /// name.
     pub fn name(mut self, name: &str) -> Self {
         self.name = String::from(name);
+        self
+    }
+
+    pub fn sq_poll(mut self, sq_poll: bool) -> Self {
+        self.sq_poll = sq_poll;
         self
     }
 
@@ -736,6 +750,7 @@ impl LocalExecutorPoolBuilder {
             let preempt_timer_duration = self.preempt_timer_duration;
             let spin_before_park = self.spin_before_park;
             let latch = Latch::clone(latch);
+            let sq_poll = self.sq_poll;
 
             move || {
                 // only allow the thread to create the `LocalExecutor` if all other threads that
@@ -747,6 +762,7 @@ impl LocalExecutorPoolBuilder {
                         preempt_timer_duration,
                         cpu_binding,
                         spin_before_park,
+                        sq_poll,
                     )
                     .unwrap();
                     le.init();
@@ -879,6 +895,7 @@ impl LocalExecutor {
         preempt_timer: Duration,
         cpu_binding: Option<impl IntoIterator<Item = usize>>,
         mut spin_before_park: Option<Duration>,
+        sq_poll: bool,
     ) -> Result<LocalExecutor> {
         // Linux's default memory policy is "local allocation" which allocates memory
         // on the NUMA node containing the CPU where the allocation takes place.
@@ -899,7 +916,7 @@ impl LocalExecutor {
             queues: Rc::new(RefCell::new(queues)),
             parker: p,
             id: notifier.id(),
-            reactor: Rc::new(parking::Reactor::new(notifier, io_memory)),
+            reactor: Rc::new(parking::Reactor::new(notifier, io_memory, sq_poll)),
         })
     }
 
@@ -1965,8 +1982,7 @@ mod test {
     use crate::{
         enclose,
         timer::{self, sleep, Timer},
-        Local,
-        SharesManager,
+        Local, SharesManager,
     };
     use core::mem::MaybeUninit;
     use futures::{
@@ -1978,8 +1994,7 @@ mod test {
         collections::HashMap,
         sync::{
             atomic::{AtomicUsize, Ordering},
-            Arc,
-            Mutex,
+            Arc, Mutex,
         },
         task::Waker,
     };

@@ -31,9 +31,7 @@ use std::{
     cell::RefCell,
     collections::{BTreeMap, VecDeque},
     ffi::CString,
-    fmt,
-    io,
-    mem,
+    fmt, io, mem,
     os::unix::{ffi::OsStrExt, io::RawFd},
     panic::{RefUnwindSafe, UnwindSafe},
     path::Path,
@@ -50,20 +48,10 @@ use crate::{
     io::{FileScheduler, IoScheduler, ScheduledSource},
     sys,
     sys::{
-        DirectIo,
-        DmaBuffer,
-        IoBuffer,
-        PollableStatus,
-        SleepNotifier,
-        Source,
-        SourceType,
+        DirectIo, DmaBuffer, IoBuffer, PollableStatus, SleepNotifier, Source, SourceType,
         StatsCollection,
     },
-    IoRequirements,
-    IoStats,
-    Latency,
-    Local,
-    TaskQueueHandle,
+    IoRequirements, IoStats, Latency, Local, TaskQueueHandle,
 };
 
 /// Waits for a notification.
@@ -276,8 +264,8 @@ pub(crate) struct Reactor {
 }
 
 impl Reactor {
-    pub(crate) fn new(notifier: Arc<SleepNotifier>, io_memory: usize) -> Reactor {
-        let sys = sys::Reactor::new(notifier, io_memory)
+    pub(crate) fn new(notifier: Arc<SleepNotifier>, io_memory: usize, sq_poll: bool) -> Reactor {
+        let sys = sys::Reactor::new(notifier, io_memory, sq_poll)
             .expect("cannot initialize I/O event notification");
         let (preempt_ptr_head, preempt_ptr_tail) = sys.preempt_pointers();
         Reactor {

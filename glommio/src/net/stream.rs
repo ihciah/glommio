@@ -6,8 +6,7 @@
 use crate::{
     parking::Reactor,
     sys::{self, DmaBuffer, Source, SourceType},
-    ByteSliceMutExt,
-    Local,
+    ByteSliceMutExt, Local,
 };
 use futures_lite::ready;
 use nix::sys::socket::MsgFlags;
@@ -270,6 +269,7 @@ impl<S: FromRawFd + AsRawFd + From<socket2::Socket>> GlommioStream<S> {
         buf: &mut [u8],
     ) -> Poll<io::Result<usize>> {
         poll_some!(self.consume_receive_buffer(buf));
+
         poll_some!(self.yolo_rx(buf));
         poll_err!(ready!(self.poll_replenish_buffer(cx, buf.len())));
         poll_some!(self.consume_receive_buffer(buf));

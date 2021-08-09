@@ -58,8 +58,7 @@ mod probe;
 pub mod registrar;
 
 use std::{
-    fmt,
-    io,
+    fmt, io,
     mem::{self, MaybeUninit},
     os::unix::io::RawFd,
     ptr::{self, NonNull},
@@ -122,6 +121,7 @@ bitflags::bitflags! {
 /// operated on without synchronization.
 pub struct IoUring {
     ring: uring_sys::io_uring,
+    sq_poll: bool,
 }
 
 impl IoUring {
@@ -134,20 +134,16 @@ impl IoUring {
     /// The underlying `SubmissionQueue` and `CompletionQueue` will each have
     /// this number of entries.
     pub fn new(entries: u32) -> io::Result<IoUring> {
-        IoUring::new_with_flags(entries, SetupFlags::empty(), SetupFeatures::empty())
+        IoUring::new_with_flags(entries, SetupFlags::empty())
     }
 
-    /// Creates a new `IoUring` using a set of `SetupFlags` and `SetupFeatures`
+    /// Creates a new `IoUring` using a set of `SetupFlags`
     /// for advanced use cases.
-    pub fn new_with_flags(
-        entries: u32,
-        flags: SetupFlags,
-        features: SetupFeatures,
-    ) -> io::Result<IoUring> {
+    pub fn new_with_flags(entries: u32, flags: SetupFlags) -> io::Result<IoUring> {
         unsafe {
             let mut params: uring_sys::io_uring_params = mem::zeroed();
             params.flags = flags.bits();
-            params.features = features.bits();
+            params.features = SetupFlags::empty().bits();
             let mut ring = MaybeUninit::uninit();
             resultify(uring_sys::io_uring_queue_init_params(
                 entries as _,
@@ -156,8 +152,14 @@ impl IoUring {
             ))?;
             Ok(IoUring {
                 ring: ring.assume_init(),
+                sq_poll: flags.contains(SetupFlags::SQPOLL),
             })
         }
+    }
+
+    /// An helper to detect if sq_poll is enabled
+    pub fn sq_poll(&self) -> bool {
+        self.sq_poll
     }
 
     /// Returns the `SubmissionQueue` part of the `IoUring`.

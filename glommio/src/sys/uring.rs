@@ -14,12 +14,10 @@ use std::{
     cell::{Cell, Ref, RefCell, RefMut},
     collections::VecDeque,
     ffi::CStr,
-    fmt,
-    io,
+    fmt, io,
     io::{Error, ErrorKind},
     os::unix::io::RawFd,
-    panic,
-    ptr,
+    panic, ptr,
     rc::Rc,
     sync::Arc,
     time::Duration,
@@ -32,21 +30,11 @@ use crate::{
     sys::{
         self,
         dma_buffer::{BufferStorage, DmaBuffer},
-        DirectIo,
-        EnqueuedSource,
-        InnerSource,
-        IoBuffer,
-        PollableStatus,
-        Source,
-        SourceType,
+        DirectIo, EnqueuedSource, InnerSource, IoBuffer, PollableStatus, Source, SourceType,
         TimeSpec64,
     },
     uring_sys::{self, IoRingOp},
-    IoRequirements,
-    IoStats,
-    Latency,
-    RingIoStats,
-    TaskQueueHandle,
+    IoRequirements, IoStats, Latency, RingIoStats, TaskQueueHandle,
 };
 use ahash::AHashMap;
 use buddy_alloc::buddy_alloc::{BuddyAlloc, BuddyAllocParam};
@@ -716,11 +704,7 @@ impl PollRing {
         allocator: Rc<UringBufferAllocator>,
         source_map: Rc<RefCell<SourceMap>>,
     ) -> io::Result<Self> {
-        let ring = iou::IoUring::new_with_flags(
-            size as _,
-            iou::SetupFlags::IOPOLL,
-            iou::SetupFeatures::empty(),
-        )?;
+        let ring = iou::IoUring::new_with_flags(size as _, iou::SetupFlags::IOPOLL)?;
         Ok(PollRing {
             submitted: 0,
             completed: 0,
@@ -863,10 +847,14 @@ impl SleepableRing {
         name: &'static str,
         allocator: Rc<UringBufferAllocator>,
         source_map: Rc<RefCell<SourceMap>>,
+        ring_flags: Option<iou::SetupFlags>,
     ) -> io::Result<Self> {
         assert!(*IO_URING_RECENT_ENOUGH);
         Ok(SleepableRing {
-            ring: iou::IoUring::new(size as _)?,
+            ring: iou::IoUring::new_with_flags(
+                size as _,
+                ring_flags.unwrap_or_else(iou::SetupFlags::empty),
+            )?,
             size,
             submission_queue: UringQueueState::with_capacity(size * 4, source_map.clone()),
             waiting_submission: 0,
@@ -1145,10 +1133,16 @@ fn align_up(v: usize, align: usize) -> usize {
     (v + align - 1) & !(align - 1)
 }
 
+// about 4K
+const MIN_BUFFER_SIZE: usize = 4096;
+// about 10G
+const MAX_BUFFER_SIZE: usize = 10000 << 20;
+
 impl Reactor {
     pub(crate) fn new(
         notifier: Arc<sys::SleepNotifier>,
         mut io_memory: usize,
+        ring_sq_poll: bool,
     ) -> io::Result<Reactor> {
         const MIN_MEMLOCK_LIMIT: Rlim = Rlim::from_raw(512 * 1024);
         let (memlock_limit, _) = Resource::MEMLOCK.get()?;
@@ -1164,12 +1158,24 @@ impl Reactor {
 
         let source_map = Rc::new(RefCell::new(SourceMap::default()));
         // always have at least some small amount of memory for the slab
-        io_memory = std::cmp::max(align_up(io_memory, 4096), 65536);
+        io_memory = std::cmp::max(align_up(io_memory, MIN_BUFFER_SIZE), MAX_BUFFER_SIZE);
 
         let allocator = Rc::new(UringBufferAllocator::new(io_memory));
         let registry = vec![allocator.as_bytes()];
 
-        let mut main_ring = SleepableRing::new(128, "main", allocator.clone(), source_map.clone())?;
+        let ring_flags = if ring_sq_poll {
+            Some(iou::SetupFlags::empty() | iou::SetupFlags::SQPOLL)
+        } else {
+            None
+        };
+
+        let mut main_ring = SleepableRing::new(
+            128,
+            "main",
+            allocator.clone(),
+            source_map.clone(),
+            ring_flags,
+        )?;
         let poll_ring = PollRing::new(128, allocator.clone(), source_map.clone())?;
 
         match main_ring.registrar().register_buffers_by_ref(&registry) {
@@ -1191,8 +1197,13 @@ impl Reactor {
             },
         }
 
-        let latency_ring =
-            SleepableRing::new(128, "latency", allocator.clone(), source_map.clone())?;
+        let latency_ring = SleepableRing::new(
+            128,
+            "latency",
+            allocator.clone(),
+            source_map.clone(),
+            ring_flags,
+        )?;
         let link_fd = latency_ring.ring_fd();
 
         let eventfd_src = Source::new(
@@ -1680,7 +1691,7 @@ mod tests {
     #[test]
     fn timeout_smoke_test() {
         let notifier = sys::new_sleep_notifier().unwrap();
-        let reactor = Reactor::new(notifier, 0).unwrap();
+        let reactor = Reactor::new(notifier, 0, false).unwrap();
 
         fn timeout_source(millis: u64) -> (Source, UringOpDescriptor) {
             let source = Source::new(
@@ -1776,7 +1787,7 @@ mod tests {
     fn sqe_link_chain() {
         let allocator = Rc::new(UringBufferAllocator::new(65536));
         let source_map = Rc::new(RefCell::new(SourceMap::default()));
-        let mut ring = SleepableRing::new(4, "main", allocator, source_map).unwrap();
+        let mut ring = SleepableRing::new(4, "main", allocator, source_map, None).unwrap();
         let q = ring.submission_queue();
         let mut queue = q.borrow_mut();
 
@@ -1810,7 +1821,7 @@ mod tests {
     fn unterminated_sqe_link_chain() {
         let allocator = Rc::new(UringBufferAllocator::new(65536));
         let source_map = Rc::new(RefCell::new(SourceMap::default()));
-        let mut ring = SleepableRing::new(2, "main", allocator, source_map).unwrap();
+        let mut ring = SleepableRing::new(2, "main", allocator, source_map, None).unwrap();
         let q = ring.submission_queue();
         let mut queue = q.borrow_mut();
 
@@ -1830,7 +1841,7 @@ mod tests {
     fn sqe_link_chain_overflow() {
         let allocator = Rc::new(UringBufferAllocator::new(65536));
         let source_map = Rc::new(RefCell::new(SourceMap::default()));
-        let mut ring = SleepableRing::new(2, "main", allocator, source_map).unwrap();
+        let mut ring = SleepableRing::new(2, "main", allocator, source_map, None).unwrap();
         let q = ring.submission_queue();
         let mut queue = q.borrow_mut();
 
