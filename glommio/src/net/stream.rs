@@ -270,7 +270,7 @@ impl<S: FromRawFd + AsRawFd + From<socket2::Socket>> GlommioStream<S> {
     ) -> Poll<io::Result<usize>> {
         poll_some!(self.consume_receive_buffer(buf));
 
-        poll_some!(self.yolo_rx(buf));
+        // poll_some!(self.yolo_rx(buf)); // chihai
         poll_err!(ready!(self.poll_replenish_buffer(cx, buf.len())));
         poll_some!(self.consume_receive_buffer(buf));
         unreachable!();
@@ -290,7 +290,7 @@ impl<S: FromRawFd + AsRawFd + From<socket2::Socket>> GlommioStream<S> {
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
-        poll_some!(self.yolo_tx(buf));
+        // poll_some!(self.yolo_tx(buf)); // chihai
         let mut dma = self.allocate_buffer(buf.len());
         assert_eq!(dma.write_at(0, buf), buf.len());
         self.write_dma(cx, dma)

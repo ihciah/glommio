@@ -99,6 +99,7 @@ impl fmt::Debug for UringBufferAllocator {
 impl UringBufferAllocator {
     fn new(size: usize) -> Self {
         let layout = Layout::from_size_align(size, 4096).unwrap();
+        println!("buddy alloc: {}", layout.size()); // chihai
         let (data, allocator) = unsafe {
             let data = alloc::alloc::alloc(layout) as *mut u8;
             let data = std::ptr::NonNull::new(data).unwrap();
@@ -851,6 +852,11 @@ impl SleepableRing {
     ) -> io::Result<Self> {
         assert!(*IO_URING_RECENT_ENOUGH);
         Ok(SleepableRing {
+            // ring: iou::IoUring::new_with_flags_aff(
+            //     size as _,
+            //     ring_flags.unwrap_or_else(iou::SetupFlags::empty),
+            //     9,
+            // )?,
             ring: iou::IoUring::new_with_flags(
                 size as _,
                 ring_flags.unwrap_or_else(iou::SetupFlags::empty),
@@ -1170,7 +1176,7 @@ impl Reactor {
         };
 
         let mut main_ring = SleepableRing::new(
-            128,
+            4096,
             "main",
             allocator.clone(),
             source_map.clone(),
@@ -1198,7 +1204,7 @@ impl Reactor {
         }
 
         let latency_ring = SleepableRing::new(
-            128,
+            4096,
             "latency",
             allocator.clone(),
             source_map.clone(),

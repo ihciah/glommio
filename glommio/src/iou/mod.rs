@@ -137,6 +137,31 @@ impl IoUring {
         IoUring::new_with_flags(entries, SetupFlags::empty())
     }
 
+    pub fn new_with_flags_aff(
+        entries: u32,
+        flags: SetupFlags,
+        thread_cpu: u32,
+    ) -> io::Result<IoUring> {
+        let flags = flags | SetupFlags::SQ_AFF;
+
+        unsafe {
+            let mut params: uring_sys::io_uring_params = mem::zeroed();
+            params.flags = flags.bits();
+            params.features = SetupFlags::empty().bits();
+            params.sq_thread_cpu = thread_cpu;
+            let mut ring = MaybeUninit::uninit();
+            resultify(uring_sys::io_uring_queue_init_params(
+                entries as _,
+                ring.as_mut_ptr(),
+                &mut params,
+            ))?;
+            Ok(IoUring {
+                ring: ring.assume_init(),
+                sq_poll: flags.contains(SetupFlags::SQPOLL),
+            })
+        }
+    }
+
     /// Creates a new `IoUring` using a set of `SetupFlags`
     /// for advanced use cases.
     pub fn new_with_flags(entries: u32, flags: SetupFlags) -> io::Result<IoUring> {
